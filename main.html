@@ -1,0 +1,321 @@
+<html>
+	<head>
+
+		<link rel="stylesheet" href="estilos.css">
+		<script src="users.js"></script>
+		<script src="utils.js"></script>
+		<script src="users_utils.js"></script>
+		<script src="filmes_utils.js"></script>
+		<script src="jquery-2.1.4.min.js"></script>
+		<!--<script src="movieListArray.js"></script>-->
+		<script src="movie_data_set.js"></script>
+		<script>
+
+		var STIMULATION_RATIO = 0.5;
+		var SUPPRESION_RATIO = 0.3;
+		var DEATH_RATIO = 0.1;
+		var NEIGHBORS = 10;
+		var MAX_RECOMENDATIONS = 5;
+		var N_ATIBODIES = 1500;
+
+		var DEFAULT_CONCENTRATION = 10.0;
+		var NR_RECOMMENDATIONS = 5;
+		var EXCLUDE_ALREADY_RATED = true;
+		var RATING_DELIMITER = 7;
+
+		console.log("Dados carregados.");	
+
+		function preverNotas(usuario, AIS){
+
+			var ratedMovies = [];
+			var bestRated = [];
+			var mediaUsuario = obterMedia(jUsers.users[usuario].movieRatings);
+
+			/** Vetor de filmes e notas dos usuários
+				ratedMovies[NOME_FILME] = {
+					title: NOME_FILME,
+					usuarios: []
+				} */
+			for (antibodyIndex in AIS){
+
+				var ratings = jUsers.users[AIS[antibodyIndex].id].movieRatings;
+
+				for (rating in ratings){
+
+					var movie = ratings[rating];
+					
+					if (ratedMovies[movie[0].Title] == undefined){
+					
+						ratedMovies[movie[0].Title] = {};
+						ratedMovies[movie[0].Title].usuarios = [];
+					}
+
+					ratedMovies[movie[0].Title].title = movie[0].Title;
+					ratedMovies[movie[0].Title].usuarios[new String(AIS[antibodyIndex].id)] = movie[1];
+				}
+			}
+
+			/** Vetor de filmes e notas dos usuários
+				ratedMovies[NOME_FILME] = {
+					title: NOME_FILME,
+					usuarios: [],
+					media: n
+				} */
+			for (ratings in ratedMovies){
+
+				var notas = 0;
+				var nrNotas = 0;
+				var rating = ratedMovies[ratings];
+
+				for (votoUsuario in rating.usuarios){
+					
+					notas += rating.usuarios[votoUsuario];
+					nrNotas++;
+				}
+
+				var media = notas / nrNotas;
+				rating.media = media;
+
+				//Prevê uma nota para o filme corrente
+				var notaPrevista = 0, NUMERADOR = 0, DENOMINADOR = 0;
+
+				for (antibodyIndex in AIS){
+
+					if (rating.usuarios[AIS[antibodyIndex].id] != undefined) { //usuário deu nota para o filme corrente
+					
+						DENOMINADOR += AIS[antibodyIndex].matching * AIS[antibodyIndex].concentration;
+						//NUMERADOR += DENOMINADOR * (rating.usuarios[AIS[antibodyIndex].id] - rating.media);
+						NUMERADOR += DENOMINADOR * (rating.usuarios[AIS[antibodyIndex].id] - obterMedia(jUsers.users[AIS[antibodyIndex].id].movieRatings));
+					}
+				}
+
+				notaPrevista = mediaUsuario + (NUMERADOR / DENOMINADOR);
+				rating.notaPrevista = notaPrevista;
+
+				if (notaPrevista >= RATING_DELIMITER){
+
+					if (EXCLUDE_ALREADY_RATED === true){
+
+						if (!usuarioJaAssistiu(usuario, rating.title)){
+
+							bestRated.push(rating);
+						}
+
+					} else {
+
+						bestRated.push(rating);
+					}
+				}
+			}
+
+			bestRated.sort(function(a, b){
+
+				if (a.notaPrevista > b.notaPrevista){
+
+					return -1;
+
+				} else if (a.notaPrevista < b.notaPrevista){
+
+					return 1;
+				}
+
+				return 0;
+			});
+
+			return bestRated;
+		}
+
+		function executeAIS(targetUser, users){
+
+			//var antigen = encodeUser(user); // Necessário?
+			var antiCorpos = inicializarAntiCorpos(targetUser);			
+			var AIS = [], rawAIS = [];
+			var isAISEstavel = false;
+			var targetUserConcentration = parseFloat(users[targetUser].concentration);
+
+			while (true){ //até estabilizar a rede: critério é número de vizinhos
+			
+				for (currentAntibody in antiCorpos){
+
+					var termo1 = STIMULATION_RATIO * antiCorpos[currentAntibody].matching * antiCorpos[currentAntibody].concentration * targetUserConcentration;
+					var termo2 = 0;
+
+					for (otherAntibodies in antiCorpos){
+
+						if (otherAntibodies == currentAntibody) continue; //evita comparar o anticorpo com ele mesmo
+
+						termo2 += afinidade(antiCorpos[currentAntibody].id, antiCorpos[otherAntibodies].id) * antiCorpos[currentAntibody].concentration * antiCorpos[otherAntibodies].concentration;
+					}
+
+					termo3 = DEATH_RATIO * antiCorpos[currentAntibody].concentration;
+
+					var currentConcentration = termo1 - SUPPRESION_RATIO/NEIGHBORS * termo2 - termo3;
+
+					antiCorpos[currentAntibody].concentration = currentConcentration;
+
+					//TODO
+					if (currentConcentration > DEFAULT_CONCENTRATION){
+					
+						AIS.push(antiCorpos[currentAntibody]);
+					}
+					//TODO-E
+				}
+
+				antiCorpos = AIS;
+				AIS = [];
+
+				if (antiCorpos.length <= 3) break;
+			}
+
+			return antiCorpos;
+		}
+
+		function inicializarAntiCorpos(targetUser){
+
+			var anticorpos = [];
+			var matchings = [];
+			var bestAnticorpos = [];
+
+			for (var i=0; i<N_ATIBODIES; i++){
+
+				if (i != targetUser){ //evita comparar o usuário com ele mesmo
+
+					var matchingScore = afinidade(targetUser, i);
+
+					var ab = {
+						id: i,
+						concentration: DEFAULT_CONCENTRATION,
+						matching: matchingScore
+					}
+
+					matchings.push(matchingScore);
+					anticorpos.push(ab);
+				}				
+			}
+
+			matchings.sort();
+			bestMatchings = matchings.splice(matchings.length - NEIGHBORS, NEIGHBORS);
+
+			for (ab in anticorpos){ //Mantém apenas os melhores vizinhos
+
+				for (b in bestMatchings){
+					
+					if (anticorpos[ab].matching == bestMatchings[b]){
+
+						bestAnticorpos.push(anticorpos[ab]);
+					}
+				}
+			}
+
+			return bestAnticorpos;
+		}
+
+		function afinidade(usuario1, usuario2){
+
+			var interseccaoFilmes = obterInterseccaoEntreFilmes(usuario1, usuario2);
+
+			var notasUsuario1 = obterNotasUsuario(jUsers.users[usuario1].movieRatings, interseccaoFilmes);
+			var notasUsuario2 = obterNotasUsuario(jUsers.users[usuario2].movieRatings, interseccaoFilmes);
+
+			var mediaNotasUsuario1 = obterMedia(jUsers.users[usuario1].movieRatings);
+			var mediaNotasUsuario2 = obterMedia(jUsers.users[usuario2].movieRatings);
+
+			var vetorFilmes = montarVetorFilmes(notasUsuario1, notasUsuario2, interseccaoFilmes);
+
+			var numerador = 0, denominador = 0, denominadorX = 0, denominadorY = 0;
+
+			for (var i=0; i<vetorFilmes.length; i++){
+
+				var x = arredondar(vetorFilmes[i].notaUsuario1 - mediaNotasUsuario1);
+				var y = arredondar(vetorFilmes[i].notaUsuario2 - mediaNotasUsuario2);
+
+				var x2 = arredondar(Math.pow(x, 2));
+				var y2 = arredondar(Math.pow(y, 2));
+
+				numerador += x * y;
+				denominadorX += x2;
+				denominadorY += y2;
+			}
+
+			denominador = Math.sqrt(denominadorX * denominadorY);
+
+			var CORREL = arredondar(numerador / denominador);
+
+			return CORREL;
+		}
+
+		var bestRated;
+
+		function recomendarFilmes(){
+
+			var USUARIO = document.getElementById("usuario").value;
+			var div = document.getElementById("recommendations");
+			var divNames = document.getElementById("recommendationsNames");
+			div.innerHTML = "";
+			divNames.innerHTML = "";
+
+			var tableR = document.createElement("table");
+			tableR.setAttribute("cellpadding", 10);
+			var tr = document.createElement("tr");
+			
+			console.log("Aguarde...");
+
+			var AIS = executeAIS(USUARIO, jUsers.users);
+
+			console.log("AIS Executado... Prevendo Notas...");
+
+			bestRated = preverNotas(USUARIO, AIS);
+
+			for (var i=0; i<NR_RECOMMENDATIONS; i++){
+
+				console.log(bestRated[i].title);
+				var poster = MOVIE_DATA_SET.filter(function(v){ return v.title == bestRated[i].title });
+				
+				var td = document.createElement("td");
+				td.align = "center"
+				var img = document.createElement("img");
+				img.src = poster[0].poster;
+
+				td.appendChild(img);
+				tr.appendChild(td);
+			}
+
+			tableR.appendChild(tr);
+			var tr = document.createElement("tr");
+			//var marginLeft = 100;
+
+			for (var i=0; i<NR_RECOMMENDATIONS; i++){
+
+				var td = document.createElement("td");
+				var titleDiv = document.createElement("div");
+				titleDiv.innerHTML = "<span style=\"color: steelblue; font-size: 1em\"><strong>"+(i+1)+". "+bestRated[i].title+"</strong></span>";
+				titleDiv.align = "center";
+				td.appendChild(titleDiv);
+				tr.appendChild(td);
+			}
+
+			tableR.appendChild(tr);
+			div.appendChild(tableR);
+
+			console.log("Pronto!");
+		}
+
+		"use strict";
+
+		</script>
+	</head>
+	<body>
+		<label for="usuario">Usuário</label>
+		<input type="text" id="usuario">
+		<input type="button" value="Ver Notas" onclick="mostrarNotasUsuario();">
+		<input type="button" value="Recomendar Filmes" onclick="recomendarFilmes();">
+		<div id="recommendations"></div>
+		<div id="recommendationsNames"></div>
+		<hr>
+		<div id="notas"></div>
+		<br><br><br>
+		<img src="CORREL.gif" width="320px" class="formula" /><br><br>
+		<img src="Formula2.png" width="400px" class="formula" /><br><br>
+		<img src="Formula3.png" class="formula" width="350px" />
+	</body>
+</html>
