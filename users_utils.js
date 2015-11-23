@@ -52,6 +52,7 @@ function mostrarNotasUsuario(){
 	var aval = jUsers.users[user];
 	var div = document.getElementById("notas");
 	div.innerHTML = "";
+	//div.innerHTML = "<strong>"+aval.biasList+"</strong><br>";
 
 	var movies = [];
 
@@ -59,7 +60,8 @@ function mostrarNotasUsuario(){
 
 		var movie = {
 			title: aval.movieRatings[movie][0].Title,
-			rating: aval.movieRatings[movie][1]
+			rating: aval.movieRatings[movie][1],
+			genre: aval.movieRatings[movie][0].Genre
 		};
 
 		movies.push(movie);

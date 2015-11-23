@@ -6,22 +6,20 @@
 		<script src="utils.js"></script>
 		<script src="users_utils.js"></script>
 		<script src="filmes_utils.js"></script>
-		<script src="jquery-2.1.4.min.js"></script>
-		<!--<script src="movieListArray.js"></script>-->
 		<script src="movie_data_set.js"></script>
 		<script>
 
 		var STIMULATION_RATIO = 0.5;
 		var SUPPRESION_RATIO = 0.3;
 		var DEATH_RATIO = 0.1;
-		var NEIGHBORS = 10;
-		var MAX_RECOMENDATIONS = 5;
+		var NEIGHBORS = 100;
+		var NR_RECOMMENDATIONS = 5;
 		var N_ATIBODIES = 1500;
 
-		var DEFAULT_CONCENTRATION = 10.0;
-		var NR_RECOMMENDATIONS = 5;
-		var EXCLUDE_ALREADY_RATED = true;
+		var DEFAULT_CONCENTRATION = 10.0;		
+		var EXCLUDE_ALREADY_RATED = false;
 		var RATING_DELIMITER = 7;
+		var NEIGHBORS_LIMIT = 50;
 
 		console.log("Dados carregados.");	
 
@@ -84,7 +82,6 @@
 					if (rating.usuarios[AIS[antibodyIndex].id] != undefined) { //usuário deu nota para o filme corrente
 					
 						DENOMINADOR += AIS[antibodyIndex].matching * AIS[antibodyIndex].concentration;
-						//NUMERADOR += DENOMINADOR * (rating.usuarios[AIS[antibodyIndex].id] - rating.media);
 						NUMERADOR += DENOMINADOR * (rating.usuarios[AIS[antibodyIndex].id] - obterMedia(jUsers.users[AIS[antibodyIndex].id].movieRatings));
 					}
 				}
@@ -127,8 +124,7 @@
 
 		function executeAIS(targetUser, users){
 
-			//var antigen = encodeUser(user); // Necessário?
-			var antiCorpos = inicializarAntiCorpos(targetUser);			
+			var antiCorpos = inicializarAntiCorpos(targetUser);
 			var AIS = [], rawAIS = [];
 			var isAISEstavel = false;
 			var targetUserConcentration = parseFloat(users[targetUser].concentration);
@@ -153,18 +149,16 @@
 
 					antiCorpos[currentAntibody].concentration = currentConcentration;
 
-					//TODO
 					if (currentConcentration > DEFAULT_CONCENTRATION){
 					
 						AIS.push(antiCorpos[currentAntibody]);
 					}
-					//TODO-E
 				}
 
 				antiCorpos = AIS;
 				AIS = [];
 
-				if (antiCorpos.length <= 3) break;
+				if (antiCorpos.length <= NEIGHBORS_LIMIT) break;
 			}
 
 			return antiCorpos;
@@ -246,13 +240,11 @@
 
 		var bestRated;
 
-		function recomendarFilmes(){
+		function recomendarFilmes(){	
 
 			var USUARIO = document.getElementById("usuario").value;
 			var div = document.getElementById("recommendations");
-			var divNames = document.getElementById("recommendationsNames");
 			div.innerHTML = "";
-			divNames.innerHTML = "";
 
 			var tableR = document.createElement("table");
 			tableR.setAttribute("cellpadding", 10);
@@ -282,13 +274,12 @@
 
 			tableR.appendChild(tr);
 			var tr = document.createElement("tr");
-			//var marginLeft = 100;
 
 			for (var i=0; i<NR_RECOMMENDATIONS; i++){
 
 				var td = document.createElement("td");
 				var titleDiv = document.createElement("div");
-				titleDiv.innerHTML = "<span style=\"color: steelblue; font-size: 1em\"><strong>"+(i+1)+". "+bestRated[i].title+"</strong></span>";
+				titleDiv.innerHTML = "<a target=\"_blank\" href=\"http://www.imdb.com/search/title?title="+bestRated[i].title+"\"><span style=\"color: steelblue; font-size: 1em\"><strong>"+(i+1)+". "+bestRated[i].title+"</strong></span></a>";
 				titleDiv.align = "center";
 				td.appendChild(titleDiv);
 				tr.appendChild(td);
@@ -298,9 +289,35 @@
 			div.appendChild(tableR);
 
 			console.log("Pronto!");
-		}
 
-		"use strict";
+			if (EXCLUDE_ALREADY_RATED === false){
+
+				//calculateAccuracy(bestRated);
+			}
+		}	
+
+		/*function calculateAccuracy(bestRated){
+
+			var USUARIO = document.getElementById("usuario").value;
+			var divA = document.getElementById("recommendationsAccuracy");
+			var movies = jUsers.users[USUARIO].movieRatings;
+			var SIGMA = 0, np = 0;
+			
+			for (var i=0; i<bestRated.length; i++){
+
+				for (j in movies){
+
+					if (movies[j][0].Title == bestRated[i].title){ //usuário votou neste filme
+
+						SIGMA += (movies[j][1] - bestRated[i].notaPrevista);
+						np++;
+					}
+				}
+			}
+
+			var MAE = SIGMA/np;
+			console.log(MAE);
+		}*/
 
 		</script>
 	</head>
@@ -310,7 +327,7 @@
 		<input type="button" value="Ver Notas" onclick="mostrarNotasUsuario();">
 		<input type="button" value="Recomendar Filmes" onclick="recomendarFilmes();">
 		<div id="recommendations"></div>
-		<div id="recommendationsNames"></div>
+		<div id="recommendationsAccuracy"></div>
 		<hr>
 		<div id="notas"></div>
 		<br><br><br>
