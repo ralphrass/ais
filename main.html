@@ -9,19 +9,21 @@
 		<script src="movie_data_set.js"></script>
 		<script>
 
-		var STIMULATION_RATIO = 0.5;
-		var SUPPRESION_RATIO = 0.3;
-		var DEATH_RATIO = 0.1;
+		var STIMULATION_RATIO = 0.35; //0.35
+		var SUPPRESION_RATIO = 0.04; //0.04
+		var DEATH_RATIO = 0.1; //0.1
 		var NEIGHBORS = 100;
 		var NR_RECOMMENDATIONS = 5;
 		var N_ATIBODIES = 1500;
 
-		var DEFAULT_CONCENTRATION = 10.0;		
-		var EXCLUDE_ALREADY_RATED = false;
-		var RATING_DELIMITER = 7;
-		var NEIGHBORS_LIMIT = 50;
+		var DEFAULT_CONCENTRATION = 10.0;
+		var MAX_CONCENTRATION = 100.0;
+		var SUFFICIENT_LOW_CONCENTRATION = 1.5; //1.5
+		var EXCLUDE_ALREADY_RATED = true;
+		var NEIGHBORS_LIMIT = 10;
+		var ITERATIONS_LIMIT = 10;
 
-		console.log("Dados carregados.");	
+		console.log("Dados carregados.");
 
 		function preverNotas(usuario, AIS){
 
@@ -29,108 +31,84 @@
 			var bestRated = [];
 			var mediaUsuario = obterMedia(jUsers.users[usuario].movieRatings);
 
-			/** Vetor de filmes e notas dos usuários
-				ratedMovies[NOME_FILME] = {
-					title: NOME_FILME,
-					usuarios: []
-				} */
-			for (antibodyIndex in AIS){
+			for (movieIndex in MOVIE_DATA_SET){
 
-				var ratings = jUsers.users[AIS[antibodyIndex].id].movieRatings;
+				var DENOMINADOR = 0, NUMERADOR = 0;
 
-				for (rating in ratings){
+				for (antibody in AIS){
 
-					var movie = ratings[rating];
-					
-					if (ratedMovies[movie[0].Title] == undefined){
-					
-						ratedMovies[movie[0].Title] = {};
-						ratedMovies[movie[0].Title].usuarios = [];
+					var movieRating = jUsers.users[AIS[antibody].id].movieRatings.filter(function(a){
+
+						return a[0].Title == MOVIE_DATA_SET[movieIndex].title;
+					});
+
+					if (movieRating[0] != undefined){ //considera apenas os usuários que votaram no filme corrente
+
+						var antibodyRating = (movieRating[0][1] > 0)?movieRating[0][1]:1; //Protege contra divisão por zero
+						var antibodyAverage = obterMedia(jUsers.users[AIS[antibody].id].movieRatings);
+
+						var weight = AIS[antibody].matching * AIS[antibody].concentration
+
+						NUMERADOR += weight * (antibodyRating - antibodyAverage);
+						DENOMINADOR += weight;
 					}
-
-					ratedMovies[movie[0].Title].title = movie[0].Title;
-					ratedMovies[movie[0].Title].usuarios[new String(AIS[antibodyIndex].id)] = movie[1];
 				}
+
+				var rating = mediaUsuario + NUMERADOR/DENOMINADOR;
+				var movieRating = {
+
+					title: MOVIE_DATA_SET[movieIndex].title,
+					rating: rating
+				};
+
+				ratedMovies.push(movieRating);
 			}
+			
+			ratedMovies.sort(function(a,b){
 
-			/** Vetor de filmes e notas dos usuários
-				ratedMovies[NOME_FILME] = {
-					title: NOME_FILME,
-					usuarios: [],
-					media: n
-				} */
-			for (ratings in ratedMovies){
-
-				var notas = 0;
-				var nrNotas = 0;
-				var rating = ratedMovies[ratings];
-
-				for (votoUsuario in rating.usuarios){
-					
-					notas += rating.usuarios[votoUsuario];
-					nrNotas++;
-				}
-
-				var media = notas / nrNotas;
-				rating.media = media;
-
-				//Prevê uma nota para o filme corrente
-				var notaPrevista = 0, NUMERADOR = 0, DENOMINADOR = 0;
-
-				for (antibodyIndex in AIS){
-
-					if (rating.usuarios[AIS[antibodyIndex].id] != undefined) { //usuário deu nota para o filme corrente
-					
-						DENOMINADOR += AIS[antibodyIndex].matching * AIS[antibodyIndex].concentration;
-						NUMERADOR += DENOMINADOR * (rating.usuarios[AIS[antibodyIndex].id] - obterMedia(jUsers.users[AIS[antibodyIndex].id].movieRatings));
-					}
-				}
-
-				notaPrevista = mediaUsuario + (NUMERADOR / DENOMINADOR);
-				rating.notaPrevista = notaPrevista;
-
-				if (notaPrevista >= RATING_DELIMITER){
-
-					if (EXCLUDE_ALREADY_RATED === true){
-
-						if (!usuarioJaAssistiu(usuario, rating.title)){
-
-							bestRated.push(rating);
-						}
-
-					} else {
-
-						bestRated.push(rating);
-					}
-				}
-			}
-
-			bestRated.sort(function(a, b){
-
-				if (a.notaPrevista > b.notaPrevista){
-
+				if (a.rating > b.rating){
 					return -1;
-
-				} else if (a.notaPrevista < b.notaPrevista){
-
+				} else if (a.rating < b.rating){
 					return 1;
 				}
-
 				return 0;
 			});
 
-			return bestRated;
+			console.log(ratedMovies);
+
+			if (EXCLUDE_ALREADY_RATED === true){ //Apenas filmes que o usuário não viu
+
+				filteredMovies = ratedMovies;
+				ratedMovies = [];
+
+				for (movie in filteredMovies){
+
+					if (!usuarioJaAssistiu(usuario, filteredMovies[movie].title)){
+
+						ratedMovies.push(filteredMovies[movie]);
+					}
+
+					if (ratedMovies.length == NR_RECOMMENDATIONS){
+
+						break;
+					}
+				}
+			}
+
+			return ratedMovies;
 		}
 
 		function executeAIS(targetUser, users){
 
 			var antiCorpos = inicializarAntiCorpos(targetUser);
-			var AIS = [], rawAIS = [];
-			var isAISEstavel = false;
+			var AIS = [];
+			var nrIteracoesSemMudar = 0, ultimoTamanho = 0;
 			var targetUserConcentration = parseFloat(users[targetUser].concentration);
 
-			while (true){ //até estabilizar a rede: critério é número de vizinhos
-			
+			while (true){ //até estabilizar a rede
+
+				ultimoTamanho = antiCorpos.length;
+							
 				for (currentAntibody in antiCorpos){
 
 					var termo1 = STIMULATION_RATIO * antiCorpos[currentAntibody].matching * antiCorpos[currentAntibody].concentration * targetUserConcentration;
@@ -140,17 +118,22 @@
 
 						if (otherAntibodies == currentAntibody) continue; //evita comparar o anticorpo com ele mesmo
 
-						termo2 += afinidade(antiCorpos[currentAntibody].id, antiCorpos[otherAntibodies].id) * antiCorpos[currentAntibody].concentration * antiCorpos[otherAntibodies].concentration;
+						termo2 += Math.abs(afinidade(antiCorpos[currentAntibody].id, antiCorpos[otherAntibodies].id)) * antiCorpos[currentAntibody].concentration * antiCorpos[otherAntibodies].concentration;
 					}
 
 					termo3 = DEATH_RATIO * antiCorpos[currentAntibody].concentration;
 
-					var currentConcentration = termo1 - SUPPRESION_RATIO/NEIGHBORS * termo2 - termo3;
-
-					antiCorpos[currentAntibody].concentration = currentConcentration;
-
-					if (currentConcentration > DEFAULT_CONCENTRATION){
+					//var currentConcentration = termo1 - SUPPRESION_RATIO/NEIGHBORS * termo2 - termo3;
+					var currentConcentration = termo1 - SUPPRESION_RATIO/antiCorpos.length * termo2 - termo3;
 					
+					if (currentConcentration > SUFFICIENT_LOW_CONCENTRATION) { //critério de remoção de anticorpos
+											
+						if (currentConcentration > MAX_CONCENTRATION){ //Evita a saturação da concentração
+
+							currentConcentration = DEFAULT_CONCENTRATION;
+						}
+
+						antiCorpos[currentAntibody].concentration = currentConcentration;
 						AIS.push(antiCorpos[currentAntibody]);
 					}
 				}
@@ -158,23 +141,35 @@
 				antiCorpos = AIS;
 				AIS = [];
 
-				if (antiCorpos.length <= NEIGHBORS_LIMIT) break;
+				console.log(antiCorpos.length+ " - "+ultimoTamanho);
+				
+				if (antiCorpos.length <= NEIGHBORS_LIMIT) break; //critério de estabilidade: tamanho mínimo
+				if (antiCorpos.length != ultimoTamanho){ //critério de estabilidade: numero de iterações sem mudar o tamanho
+
+					nrIteracoesSemMudar = 0;
+
+				} else {
+
+					nrIteracoesSemMudar++;
+				}
+
+				if (nrIteracoesSemMudar == ITERATIONS_LIMIT) break;
 			}
 
 			return antiCorpos;
 		}
 
+		/*	Calcula a afinidade do usuário com todos os outros usuários.
+			Ordena por grau de afinidade e mantém apenas os NEIGHBOURS melhores	*/
 		function inicializarAntiCorpos(targetUser){
 
-			var anticorpos = [];
-			var matchings = [];
-			var bestAnticorpos = [];
+			var anticorpos = [], bestAnticorpos = [];//, matchings = [];
 
 			for (var i=0; i<N_ATIBODIES; i++){
 
 				if (i != targetUser){ //evita comparar o usuário com ele mesmo
 
-					var matchingScore = afinidade(targetUser, i);
+					var matchingScore = Math.abs(afinidade(targetUser, i));
 
 					var ab = {
 						id: i,
@@ -182,24 +177,25 @@
 						matching: matchingScore
 					}
 
-					matchings.push(matchingScore);
 					anticorpos.push(ab);
 				}				
 			}
 
-			matchings.sort();
-			bestMatchings = matchings.splice(matchings.length - NEIGHBORS, NEIGHBORS);
+			anticorpos.sort(function(a, b){
 
-			for (ab in anticorpos){ //Mantém apenas os melhores vizinhos
+				if (a.matching > b.matching){
 
-				for (b in bestMatchings){
-					
-					if (anticorpos[ab].matching == bestMatchings[b]){
+					return -1;
 
-						bestAnticorpos.push(anticorpos[ab]);
-					}
+				} else if (a.matching < b.matching){
+
+					return 1;
 				}
-			}
+
+				return 0;
+			});
+
+			bestAnticorpos = anticorpos.slice(0, NEIGHBORS);
 
 			return bestAnticorpos;
 		}
@@ -242,9 +238,13 @@
 
 		function recomendarFilmes(){	
 
+			var start = new Date().getTime();
+
 			var USUARIO = document.getElementById("usuario").value;
 			var div = document.getElementById("recommendations");
 			div.innerHTML = "";
+
+			//document.getElementById("bias").innerHTML = jUsers.users[USUARIO].biasList;
 
 			var tableR = document.createElement("table");
 			tableR.setAttribute("cellpadding", 10);
@@ -258,9 +258,11 @@
 
 			bestRated = preverNotas(USUARIO, AIS);
 
+			//console.log(bestRated);
+
 			for (var i=0; i<NR_RECOMMENDATIONS; i++){
 
-				console.log(bestRated[i].title);
+				//console.log(bestRated[i].title);
 				var poster = MOVIE_DATA_SET.filter(function(v){ return v.title == bestRated[i].title });
 				
 				var td = document.createElement("td");
@@ -279,7 +281,7 @@
 
 				var td = document.createElement("td");
 				var titleDiv = document.createElement("div");
-				titleDiv.innerHTML = "<a target=\"_blank\" href=\"http://www.imdb.com/search/title?title="+bestRated[i].title+"\"><span style=\"color: steelblue; font-size: 1em\"><strong>"+(i+1)+". "+bestRated[i].title+"</strong></span></a>";
+				titleDiv.innerHTML = "<a target=\"_blank\" href=\"http://www.imdb.com/search/title?title="+bestRated[i].title+"\"><span style=\"color: steelblue; font-size: 1em\"><strong>"+(i+1)+". "+bestRated[i].title+" ("+arredondar(bestRated[i].rating)+")</strong></span></a>";
 				titleDiv.align = "center";
 				td.appendChild(titleDiv);
 				tr.appendChild(td);
@@ -292,14 +294,17 @@
 
 			if (EXCLUDE_ALREADY_RATED === false){
 
-				//calculateAccuracy(bestRated);
+				calculateAccuracy(bestRated);
 			}
+
+			var end = new Date().getTime();
+			var time = end - start;
+			console.log("Executado em "+time/1000+" segundos.");
 		}	
 
-		/*function calculateAccuracy(bestRated){
+		function calculateAccuracy(bestRated){
 
 			var USUARIO = document.getElementById("usuario").value;
-			var divA = document.getElementById("recommendationsAccuracy");
 			var movies = jUsers.users[USUARIO].movieRatings;
 			var SIGMA = 0, np = 0;
 			
@@ -309,7 +314,7 @@
 
 					if (movies[j][0].Title == bestRated[i].title){ //usuário votou neste filme
 
-						SIGMA += (movies[j][1] - bestRated[i].notaPrevista);
+						SIGMA += Math.abs(movies[j][1] - bestRated[i].rating);
 						np++;
 					}
 				}
@@ -317,7 +322,7 @@
 
 			var MAE = SIGMA/np;
 			console.log(MAE);
-		}*/
+		}
 
 		</script>
 	</head>
@@ -327,8 +332,8 @@
 		<input type="button" value="Ver Notas" onclick="mostrarNotasUsuario();">
 		<input type="button" value="Recomendar Filmes" onclick="recomendarFilmes();">
 		<div id="recommendations"></div>
-		<div id="recommendationsAccuracy"></div>
 		<hr>
+		<div id="bias"></div>
 		<div id="notas"></div>
 		<br><br><br>
 		<img src="CORREL.gif" width="320px" class="formula" /><br><br>
