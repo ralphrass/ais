@@ -9,19 +9,21 @@
 		<script src="movie_data_set.js"></script>
 		<script>
 
-		var STIMULATION_RATIO = 0.35; //0.35
-		var SUPPRESION_RATIO = 0.04; //0.04
-		var DEATH_RATIO = 0.1; //0.1
-		var NEIGHBORS = 100;
+		var STIMULATION_RATIO = 0.2;
+		var SUPPRESION_RATIO = 0.15;
+		var DEATH_RATIO = 0.1;
+		var NEIGHBOURS = 100;
 		var NR_RECOMMENDATIONS = 5;
 		var N_ATIBODIES = 1500;
 
+		var MAX_OVERLAP = 150;
 		var DEFAULT_CONCENTRATION = 10.0;
 		var MAX_CONCENTRATION = 100.0;
-		var SUFFICIENT_LOW_CONCENTRATION = 1.5; //1.5
+		var SUFFICIENT_LOW_CONCENTRATION =  0;//1/Math.pow(NEIGHBOURS, 16); //0;
 		var EXCLUDE_ALREADY_RATED = true;
-		var NEIGHBORS_LIMIT = 10;
+		var NEIGHBOURS_LIMIT = 10;
 		var ITERATIONS_LIMIT = 10;
+		var AVAILABLE_IDS = []; //controla os IDs de usuários disponíveis para integrar o AIS
 
 		console.log("Dados carregados.");
 
@@ -30,6 +32,9 @@
 			var ratedMovies = [];
 			var bestRated = [];
 			var mediaUsuario = obterMedia(jUsers.users[usuario].movieRatings);
+
+			console.log("Prevendo notas...");
+			console.log(AIS);
 
 			for (movieIndex in MOVIE_DATA_SET){
 
@@ -44,7 +49,8 @@
 
 					if (movieRating[0] != undefined){ //considera apenas os usuários que votaram no filme corrente
 
-						var antibodyRating = (movieRating[0][1] > 0)?movieRating[0][1]:1; //Protege contra divisão por zero
+						//var antibodyRating = (movieRating[0][1] > 0)?movieRating[0][1]:1; //Protege contra divisão por zero
+						var antibodyRating = movieRating[0][1];
 						var antibodyAverage = obterMedia(jUsers.users[AIS[antibody].id].movieRatings);
 
 						var weight = AIS[antibody].matching * AIS[antibody].concentration
@@ -74,7 +80,7 @@
 				return 0;
 			});
 
-			console.log(ratedMovies);
+			//console.log(ratedMovies);
 
 			if (EXCLUDE_ALREADY_RATED === true){ //Apenas filmes que o usuário não viu
 
@@ -101,106 +107,178 @@
 		function executeAIS(targetUser, users){
 
 			var antiCorpos = inicializarAntiCorpos(targetUser);
-			var AIS = [];
-			var nrIteracoesSemMudar = 0, ultimoTamanho = 0;
-			var targetUserConcentration = parseFloat(users[targetUser].concentration);
+			var nrIteracoesSemMudar = 0, targetUserConcentration = parseFloat(users[targetUser].concentration);
+
+			console.log("AIS inicializado, iniciando iterações...");
 
 			while (true){ //até estabilizar a rede
 
-				ultimoTamanho = antiCorpos.length;
-							
-				for (currentAntibody in antiCorpos){
+				antiCorpos = iterateAIS(antiCorpos, targetUserConcentration, false);
 
-					var termo1 = STIMULATION_RATIO * antiCorpos[currentAntibody].matching * antiCorpos[currentAntibody].concentration * targetUserConcentration;
-					var termo2 = 0;
+				if (antiCorpos.length < NEIGHBOURS){ //critério de estabilidade: numero de iterações sem mudar o tamanho
 
-					for (otherAntibodies in antiCorpos){
-
-						if (otherAntibodies == currentAntibody) continue; //evita comparar o anticorpo com ele mesmo
-
-						termo2 += Math.abs(afinidade(antiCorpos[currentAntibody].id, antiCorpos[otherAntibodies].id)) * antiCorpos[currentAntibody].concentration * antiCorpos[otherAntibodies].concentration;
-					}
-
-					termo3 = DEATH_RATIO * antiCorpos[currentAntibody].concentration;
-
-					//var currentConcentration = termo1 - SUPPRESION_RATIO/NEIGHBORS * termo2 - termo3;
-					var currentConcentration = termo1 - SUPPRESION_RATIO/antiCorpos.length * termo2 - termo3;
-					
-					if (currentConcentration > SUFFICIENT_LOW_CONCENTRATION) { //critério de remoção de anticorpos
-											
-						if (currentConcentration > MAX_CONCENTRATION){ //Evita a saturação da concentração
-
-							currentConcentration = DEFAULT_CONCENTRATION;
-						}
-
-						antiCorpos[currentAntibody].concentration = currentConcentration;
-						AIS.push(antiCorpos[currentAntibody]);
-					}
-				}
-
-				antiCorpos = AIS;
-				AIS = [];
-
-				console.log(antiCorpos.length+ " - "+ultimoTamanho);
-				
-				if (antiCorpos.length <= NEIGHBORS_LIMIT) break; //critério de estabilidade: tamanho mínimo
-				if (antiCorpos.length != ultimoTamanho){ //critério de estabilidade: numero de iterações sem mudar o tamanho
-
+					antiCorpos = replaceAntibodies(targetUser, antiCorpos, (NEIGHBOURS - antiCorpos.length));
 					nrIteracoesSemMudar = 0;
 
 				} else {
 
 					nrIteracoesSemMudar++;
 				}
+				
+				if (nrIteracoesSemMudar > 0){
+				
+					console.log("Iterações sem mudar: "+nrIteracoesSemMudar);
+				}
 
-				if (nrIteracoesSemMudar == ITERATIONS_LIMIT) break;
+				if (nrIteracoesSemMudar == ITERATIONS_LIMIT || AVAILABLE_IDS.length < NEIGHBOURS) {
+
+					break;
+				}
+			}
+
+			console.log("Estabilizando a rede...");
+
+			var isInMaxConcentration = false;
+			var maxIterations = 0;
+
+			antiCorpos = resetAIS(antiCorpos);
+
+			while (!isInMaxConcentration){ //até que um dos anticorpos sature
+
+				antiCorpos = iterateAIS(antiCorpos, targetUserConcentration, true);
+			
+				for (a in antiCorpos){
+
+					if (antiCorpos[a].concentration > MAX_CONCENTRATION){
+
+						isInMaxConcentration = true;
+						break;
+					}
+				}
+
+				if (maxIterations == ITERATIONS_LIMIT){
+
+					break;
+				}
+
+				maxIterations++;
+
+				console.log("Iteração "+maxIterations);
 			}
 
 			return antiCorpos;
+		}
+
+		function iterateAIS(antiCorpos, targetUserConcentration, isMaturationPhase){
+
+			var purerAIS = [];
+
+			for (currentAntibody in antiCorpos){
+
+				antiCorpos[currentAntibody].concentration = calculateConcentration(antiCorpos[currentAntibody], targetUserConcentration, antiCorpos);
+				
+				if (!isMaturationPhase){
+
+					if (antiCorpos[currentAntibody].concentration > MAX_CONCENTRATION){
+
+						antiCorpos[currentAntibody].concentration = MAX_CONCENTRATION;
+					}
+
+					if (antiCorpos[currentAntibody].concentration > SUFFICIENT_LOW_CONCENTRATION) { //critério de remoção de anticorpos
+
+						purerAIS.push(antiCorpos[currentAntibody]);
+					}
+
+				} else {
+
+					purerAIS.push(antiCorpos[currentAntibody]);
+				}				
+			}
+
+			return purerAIS;
+		}
+
+		function resetAIS(antiCorpos){
+
+			for (a in antiCorpos){
+
+				antiCorpos[a].concentration = DEFAULT_CONCENTRATION;
+			}
+
+			return antiCorpos;
+		}
+
+		/*	Troca os anticorpos rejeitados por outros do sistema que ainda não estejam no AIS e ainda não foram rejeitados */
+		function replaceAntibodies(targetUser, antiBodies, rejectedAntibodies){
+
+			var nReplacedAntibodies = 0;
+			var avaliables = AVAILABLE_IDS;
+
+			for (var i=0; i<rejectedAntibodies; i++){
+
+				var index = Math.floor(Math.random() * AVAILABLE_IDS.length);
+
+				antiBodies.push({id: AVAILABLE_IDS[index], concentration: DEFAULT_CONCENTRATION, matching: afinidade(targetUser, AVAILABLE_IDS[index])});
+
+				AVAILABLE_IDS.splice(index, 1);
+			}
+
+			console.log("Rejeitados: "+rejectedAntibodies+" - Disponiveis: "+AVAILABLE_IDS.length);
+			
+			return antiBodies;
+		}
+
+		function calculateConcentration(antibody, targetUserConcentration, antiCorpos){
+
+			var termo2 = 0;
+
+			for (otherAntibodies in antiCorpos){
+
+				if (otherAntibodies == currentAntibody) continue; //evita comparar o anticorpo com ele mesmo
+
+				termo2 += Math.abs(afinidade(antibody.id, antiCorpos[otherAntibodies].id)) * antibody.concentration * antiCorpos[otherAntibodies].concentration;
+			}
+
+			var currentConcentration = (STIMULATION_RATIO * antibody.matching * antibody.concentration * targetUserConcentration) - SUPPRESION_RATIO/NEIGHBOURS * termo2 - (DEATH_RATIO * antibody.concentration);
+
+			return currentConcentration;
 		}
 
 		/*	Calcula a afinidade do usuário com todos os outros usuários.
 			Ordena por grau de afinidade e mantém apenas os NEIGHBOURS melhores	*/
 		function inicializarAntiCorpos(targetUser){
 
-			var anticorpos = [], bestAnticorpos = [];//, matchings = [];
+			var antiCorpos = [], bestAnticorpos = [];
+			AVAILABLE_IDS = [];
 
 			for (var i=0; i<N_ATIBODIES; i++){
 
-				if (i != targetUser){ //evita comparar o usuário com ele mesmo
-
-					var matchingScore = Math.abs(afinidade(targetUser, i));
-
-					var ab = {
-						id: i,
-						concentration: DEFAULT_CONCENTRATION,
-						matching: matchingScore
-					}
-
-					anticorpos.push(ab);
-				}				
+				AVAILABLE_IDS.push(i);
 			}
 
-			anticorpos.sort(function(a, b){
+			for (var i=0; i<NEIGHBOURS; i++){
 
-				if (a.matching > b.matching){
+				var index = Math.floor(Math.random() * AVAILABLE_IDS.length);
 
-					return -1;
+				if (index != targetUser){
 
-				} else if (a.matching < b.matching){
+					var matchingScore = afinidade(targetUser, index);
+					var ab = {id: index, concentration: DEFAULT_CONCENTRATION, matching: matchingScore };
+					antiCorpos.push(ab);
+					AVAILABLE_IDS.splice(index, 1);
 
-					return 1;
+				} else {
+
+					i--;
 				}
+			}
 
-				return 0;
-			});
-
-			bestAnticorpos = anticorpos.slice(0, NEIGHBORS);
-
-			return bestAnticorpos;
+			return antiCorpos;
 		}
 
 		function afinidade(usuario1, usuario2){
+
+			var CORREL = 0;
 
 			var interseccaoFilmes = obterInterseccaoEntreFilmes(usuario1, usuario2);
 
@@ -216,11 +294,11 @@
 
 			for (var i=0; i<vetorFilmes.length; i++){
 
-				var x = arredondar(vetorFilmes[i].notaUsuario1 - mediaNotasUsuario1);
-				var y = arredondar(vetorFilmes[i].notaUsuario2 - mediaNotasUsuario2);
+				var x = vetorFilmes[i].notaUsuario1 - mediaNotasUsuario1;
+				var y = vetorFilmes[i].notaUsuario2 - mediaNotasUsuario2;
 
-				var x2 = arredondar(Math.pow(x, 2));
-				var y2 = arredondar(Math.pow(y, 2));
+				var x2 = Math.pow(x, 2);
+				var y2 = Math.pow(y, 2);
 
 				numerador += x * y;
 				denominadorX += x2;
@@ -229,7 +307,15 @@
 
 			denominador = Math.sqrt(denominadorX * denominadorY);
 
-			var CORREL = arredondar(numerador / denominador);
+			if (vetorFilmes.length > 0 && denominador > 0){
+
+				CORREL = numerador / denominador;
+
+				if (vetorFilmes.length < MAX_OVERLAP){
+
+					CORREL = (vetorFilmes.length / MAX_OVERLAP) * CORREL;	
+				}				
+			}
 
 			return CORREL;
 		}
@@ -249,12 +335,8 @@
 			var tableR = document.createElement("table");
 			tableR.setAttribute("cellpadding", 10);
 			var tr = document.createElement("tr");
-			
-			console.log("Aguarde...");
-
+						
 			var AIS = executeAIS(USUARIO, jUsers.users);
-
-			console.log("AIS Executado... Prevendo Notas...");
 
 			bestRated = preverNotas(USUARIO, AIS);
 
@@ -299,14 +381,14 @@
 
 			var end = new Date().getTime();
 			var time = end - start;
-			console.log("Executado em "+time/1000+" segundos.");
+			console.log("Executado em "+time/1000/60+" minutos.");
 		}	
 
 		function calculateAccuracy(bestRated){
 
 			var USUARIO = document.getElementById("usuario").value;
 			var movies = jUsers.users[USUARIO].movieRatings;
-			var SIGMA = 0, np = 0;
+			var SIGMA = 0, np = 0, RSMAE = 0;
 			
 			for (var i=0; i<bestRated.length; i++){
 
@@ -315,13 +397,17 @@
 					if (movies[j][0].Title == bestRated[i].title){ //usuário votou neste filme
 
 						SIGMA += Math.abs(movies[j][1] - bestRated[i].rating);
+						RSMAE += Math.pow(movies[j][1] - bestRated[i].rating, 2);
 						np++;
 					}
 				}
 			}
 
 			var MAE = SIGMA/np;
-			console.log(MAE);
+			RSMAE = Math.sqrt(RSMAE/np);
+			
+			console.log("MAE: "+MAE/2);
+			console.log("RSMAE: "+RSMAE/2);
 		}
 
 		</script>
